@@ -1,0 +1,6 @@
+[submodule "packwiz"]
+	path = packwiz
+	url = git@github.com:obnyis/moria-packwiz.git
+[submodule "site"]
+	path = site
+	url = git@github.com:obnyis/moria-website.git

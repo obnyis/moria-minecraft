@@ -1,0 +1,110 @@
+networks:
+  traefik-web:
+    external: true
+
+secrets:
+  rcon_password:
+    file: ${PWD}/secrets/rcon_password
+
+services:
+  packwiz:
+    build:
+      dockerfile_inline: |
+        FROM golang
+        WORKDIR /packwiz
+        RUN go install github.com/packwiz/packwiz@latest
+    command: packwiz serve
+    restart: unless-stopped
+    volumes:
+      - ./packwiz:/packwiz
+    networks:
+      - traefik-web
+    labels:
+      # Explicitly tell Traefik to expose this container
+      - "traefik.enable=true"
+      - "traefik.http.routers.${TRAEFIK_PACKWIZ}.rule=Host(`${MODPACK_TLD}.${MORIA_HOST}`)"
+      - "traefik.http.routers.${TRAEFIK_PACKWIZ}.entrypoints=websecure"
+      - "traefik.http.routers.${TRAEFIK_PACKWIZ}.tls.certresolver=le"
+      - "traefik.http.routers.${TRAEFIK_PACKWIZ}.service=${TRAEFIK_PACKWIZ}-service"
+      - "traefik.http.services.${TRAEFIK_PACKWIZ}-service.loadbalancer.server.port=8080"
+
+  webserver:
+    build:
+      dockerfile_inline: |
+        FROM node
+        WORKDIR /site
+        RUN npm init -y && \
+            npm install --save-dev \
+                @11ty/eleventy @11ty/eleventy-img @11ty/eleventy-navigation @11ty/eleventy-plugin-syntaxhighlight \
+                @fontsource/inter @fortawesome/fontawesome-free \
+                markdown-it markdown-it-anchor markdown-it-table-of-contents \
+                markdownlint-cli \
+                clean-css luxon
+    command: npx @11ty/eleventy --config=src/eleventy.js --serve
+    restart: unless-stopped
+    volumes:
+      - ./site:/site/src
+    networks:
+      - traefik-web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${TRAEFIK_WEBSITE}.rule=Host(`${WEBSITE_TLD}.${MORIA_HOST}`)"
+      - "traefik.http.routers.${TRAEFIK_WEBSITE}.entrypoints=websecure"
+      - "traefik.http.routers.${TRAEFIK_WEBSITE}.tls.certresolver=le"
+      - "traefik.http.routers.${TRAEFIK_WEBSITE}.service=${TRAEFIK_WEBSITE}-service"
+      - "traefik.http.services.${TRAEFIK_WEBSITE}-service.loadbalancer.server.port=8080"
+
+  minecraft:
+    image: "itzg/minecraft-server"
+    restart: unless-stopped
+    depends_on:
+      - packwiz
+      - webserver
+    env_file:
+      - ./moria.env
+    environment: 
+      EULA: "TRUE"
+      SERVER_NAME: "Moria Minecraft"
+      LEVEL: "Moria"
+      TYPE: "QUILT"
+      PACKWIZ_URL: "https://${MODPACK_TLD}.${MORIA_HOST}/pack.toml"
+      MAX_TICK_TIME: "-1"
+      MAX_MEMORY: 16G
+      ICON: "https://${WEBSITE_TLD}.${MORIA_HOST}/img/favicon.png"
+      OVERRIDE_ICON: "TRUE"
+      TZ: "Pacific/Auckland"
+      DIFFICULTY: "normal"
+      ENABLE_RCON: "true"
+      RCON_PASSWORD_FILE: /run/secrets/rcon_password
+      MAX_PLAYERS: 50
+      ALLOW_FLIGHT: "true"
+      SPAWN_PROTECTION: 0
+      JVM_OPTS: "-Dloader.workaround.jar_copy_all_mods=true"
+      RCON_CMDS_STARTUP: |-
+        gamerule doFireTick false
+        gamerule disableElytraMovementCheck true
+        gamerule playersSleepingPercentage 0
+        gamerule globalSoundEvents false
+      # dynmap fullrender Moria
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./minecraft-data:/data
+    secrets:
+      - rcon_password
+    networks:
+      - traefik-web
+    ports:
+      - ${MINECRAFT_PORT}:25565
+      - ${RCON_PORT}:25575
+    labels:
+      # Explicitly tell Traefik to expose this container
+      - "traefik.enable=true"
+      # Minecraft Server
+      # - Set up SRV record and open port in router
+      # Dynmap
+      - "traefik.http.routers.${TRAEFIK_DYNMAP}.rule=Host(`${DYNMAP_TLD}.${MORIA_HOST}`)"
+      - "traefik.http.routers.${TRAEFIK_DYNMAP}.entrypoints=websecure"
+      - "traefik.http.routers.${TRAEFIK_DYNMAP}.tls.certresolver=le"
+      - "traefik.http.routers.${TRAEFIK_DYNMAP}.service=${TRAEFIK_DYNMAP}-service"
+      - "traefik.http.services.${TRAEFIK_DYNMAP}-service.loadbalancer.server.port=8123"
